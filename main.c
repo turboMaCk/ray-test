@@ -1,3 +1,8 @@
+#define VLA_IMPLEMENTATION
+#include "vla.h"
+
+#include "khash.h"
+
 #include "raylib.h"
 #define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
@@ -11,8 +16,10 @@
 
 #define RAYLIB_VECTOR2_TO_CLAY_VECTOR2(vector) (Clay_Vector2) { .x = vector.x, .y = vector.y }
 
-bool debugEnabled = false;
+KHASH_MAP_INIT_STR(fonts, Font)
 
+Vla clayVla = {0};
+bool debugEnabled = false;
 
 typedef struct {
     Clay_Vector2 clickOrigin;
@@ -22,18 +29,33 @@ typedef struct {
 
 ScrollbarData scrollbarData = {0};
 
-// terrible hack
-bool reinitializeClay = false;
+void init_clay();
 
-void HandleClayErrors(Clay_ErrorData errorData) {
+void handle_clay_errors(Clay_ErrorData errorData) {
     printf("%s", errorData.errorText.chars);
+
     if (errorData.errorType == CLAY_ERROR_TYPE_ELEMENTS_CAPACITY_EXCEEDED) {
-        reinitializeClay = true;
         Clay_SetMaxElementCount(Clay_GetMaxElementCount() * 2);
     } else if (errorData.errorType == CLAY_ERROR_TYPE_TEXT_MEASUREMENT_CAPACITY_EXCEEDED) {
-        reinitializeClay = true;
         Clay_SetMaxMeasureTextCacheWordCount(Clay_GetMaxMeasureTextCacheWordCount() * 2);
     }
+
+    vla_grow_to(&clayVla, Clay_MinMemorySize());
+    init_clay();
+}
+
+void init_clay() {
+    Clay_Arena clayArena = (Clay_Arena){
+        .memory = clayVla.base,
+        .capacity = clayVla.comitted,
+    };
+
+    Clay_Dimensions clayDimensions = {
+        .width = GetScreenWidth(),
+        .height = GetScreenHeight(),
+    };
+    Clay_Initialize(clayArena, clayDimensions,
+                    (Clay_ErrorHandler){handle_clay_errors, NULL});
 }
 
 Clay_RenderCommandArray DrawUi() {
@@ -41,9 +63,9 @@ Clay_RenderCommandArray DrawUi() {
     {
         Clay_String str = CLAY_STRING_CONST("Hello world");
         CLAY_TEXT(str,
-                CLAY_TEXT_CONFIG({.fontSize = 24,
-                                  .textColor = {0, 0, 0, 255},
-                                  .textAlignment = CLAY_TEXT_ALIGN_RIGHT}));
+                  CLAY_TEXT_CONFIG({.fontSize = 24,
+                                    .textColor = {0, 0, 0, 255},
+                                    .textAlignment = CLAY_TEXT_ALIGN_RIGHT}));
     }
     return Clay_EndLayout(GetFrameTime());
 }
@@ -51,23 +73,26 @@ Clay_RenderCommandArray DrawUi() {
 const uint32_t FONT_ID_BODY_24 = 0;
 const uint32_t FONT_ID_BODY_16 = 1;
 
+khash_t(fonts) *fontMap;
+
 int main(void) {
-    uint64_t clayMemorySize = Clay_MinMemorySize();
-    Clay_Arena clayArena = Clay_CreateArenaWithCapacityAndMemory(clayMemorySize, malloc(clayMemorySize));
-    Clay_Dimensions clayDimensions = {
-        .width = GetScreenWidth(),
-        .height = GetScreenHeight(),
-    };
-    Clay_Initialize(clayArena, clayDimensions,
-                    (Clay_ErrorHandler){HandleClayErrors, 0});
+    clayVla = vla_init(VLA_MB(256));
+    uint64_t initialClayAlloc = Clay_MinMemorySize();
+    vla_grow_to(&clayVla, initialClayAlloc);
+
+    init_clay();
 
     Clay_Raylib_Initialize(TAIL_SIZE * FV_WIDTH, TAIL_SIZE * FV_HEIGHT, "raylib tesrting", FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI);
 
     // fonts
+    fontMap = kh_init(fonts);
+    int ret;
+    khiter_t k = kh_put(fonts, fontMap, "Roboto-Regular", &ret);
     Font fonts[2];
-    fonts[FONT_ID_BODY_24] =
-        LoadFontEx("resources/Roboto-Regular.ttf", 48, 0, 400);
+    fonts[FONT_ID_BODY_24] = LoadFontEx("resources/Roboto-Regular.ttf", 32, 0, 400);LoadFontEx("resources/Roboto-Regular.ttf", 32, 0, 400);
+
     SetTextureFilter(fonts[FONT_ID_BODY_24].texture, TEXTURE_FILTER_BILINEAR);
+
     fonts[FONT_ID_BODY_16] =
         LoadFontEx("resources/Roboto-Regular.ttf", 32, 0, 400);
     SetTextureFilter(fonts[FONT_ID_BODY_16].texture, TEXTURE_FILTER_BILINEAR);
@@ -75,14 +100,6 @@ int main(void) {
 
     // Main game loop
     while (!WindowShouldClose()) {
-        if (reinitializeClay) {
-            Clay_SetMaxElementCount(8192);
-            clayMemorySize = Clay_MinMemorySize();
-            clayArena = Clay_CreateArenaWithCapacityAndMemory(clayMemorySize, malloc(clayMemorySize));
-            Clay_Initialize(clayArena, (Clay_Dimensions) { (float)GetScreenWidth(), (float)GetScreenHeight() }, (Clay_ErrorHandler) { HandleClayErrors, 0 });
-            reinitializeClay = false;
-        }
-
         // debug mode
         if (IsKeyPressed(KEY_D)) {
             debugEnabled = !debugEnabled;

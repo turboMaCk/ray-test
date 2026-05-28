@@ -1,7 +1,7 @@
 C_FLAGS=-Iinclude -Wall
 LD_FLAGS=-lraylib -lm
 
-game: main.c
+game: main.c $(wildcard include/*.h)
 	$(CC) main.c $(C_FLAGS) $(LD_FLAGS) -o $@
 
 .PHONY: run
